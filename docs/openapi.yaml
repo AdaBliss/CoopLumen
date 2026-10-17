@@ -198,6 +198,50 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/proposals/{id}/delegate:
+    post:
+      tags: [Governance]
+      summary: Delegate voting power for a proposal
+      description: Delegates the caller's voting power on an active proposal to another community member.
+      security:
+        - SessionToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProposalDelegationRequest'
+      responses:
+        '200':
+          description: Delegation stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalDelegationResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: Delegator or delegatee is not an active community member
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Proposal state, voting history, or delegation topology conflicts with the request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /api/v1/kyc/initiate:
     post:
       tags: [KYC]
@@ -209,6 +253,8 @@ paths:
         required: true
         content:
           application/json:
+            schema:
+              $ref: '#/components/schemas/InitiateKycRequest'
             schema: { $ref: '#/components/schemas/InitiateKycRequest' }
       responses:
         '200':
@@ -237,6 +283,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/auth/csrf:
+    get:
+      tags: [Auth]
+      summary: Get CSRF token
+      description: >
+        Returns a fresh CSRF token and sets the `cooplumen_csrf` cookie for double-submit
+        cookie CSRF protection.
+      responses:
+        '200':
+          description: CSRF token issued
+          headers:
+            Set-Cookie:
+              description: The `cooplumen_csrf` cookie (SameSite=Strict; Path=/)
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      csrfToken:
+                        type: string
+                        description: Hex-encoded CSRF token matching the cookie.
   /api/v1/auth/logout:
     post:
       tags: [Auth]
@@ -999,6 +1071,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tokens/build-issue:
+    post:
+      tags: [Tokens]
+      summary: Build an unsigned token issuance transaction for client-side signing
+      description: >-
+        Builds an unsigned XDR transaction for issuing a community token to a distributor
+        account, so the issuer's wallet (e.g. Freighter) can sign it client-side. Guarded
+        with `authenticateJWT` and requires `admin` or `treasurer` role in the community.
+      security:
+        - SessionToken: []
+        - SessionCookie: []
+          CsrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [issuerPublicKey, assetCode, distributorPublicKey, amount]
+              properties:
+                communityId: { type: string, format: uuid, description: Optional community UUID }
+                issuerPublicKey: { $ref: '#/components/schemas/StellarKey' }
+                assetCode: { type: string, minLength: 1, maxLength: 12 }
+                distributorPublicKey: { $ref: '#/components/schemas/StellarKey' }
+                amount:
+                  { type: string, description: Decimal string amount with up to 7 decimal places }
+                memo: { type: string, maxLength: 28 }
+      responses:
+        '200':
+          description: Unsigned issuance transaction built successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      xdr:
+                        {
+                          type: string,
+                          description: Base64-encoded unsigned Stellar transaction XDR,
+                        }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/schemas/ErrorResponse' }
+        '403': { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/v1/tokens/build-trustline:
     post:
@@ -2529,3 +2649,13 @@ components:
       description: >
         Admin authentication using JWT tokens. 
         Currently a placeholder - actual implementation pending.
+    CsrfToken:
+      type: apiKey
+      in: header
+      name: x-csrf-token
+      description: Hex-encoded CSRF token matching the `cooplumen_csrf` cookie for state-changing browser requests.
+    CsrfCookie:
+      type: apiKey
+      in: cookie
+      name: cooplumen_csrf
+      description: Cookie storing the client CSRF token for double-submit cookie validation.
