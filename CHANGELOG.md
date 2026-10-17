@@ -11,6 +11,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Failed authentication attempt rate limiting per client IP in `POST /api/v1/auth/verify`, blocking with HTTP 429 after 10 failures within 5 minutes, and documented in `docs/openapi.yaml` (#360).
+- `useAuth()` hook (`frontend/src/hooks/useAuth.tsx`) exposing `{ publicKey, isAuthenticated, login, logout }` alongside optional `AuthProvider` context support (#361).
+- Automatic session JWT injection from the `cooplumen_session` auth cookie into all API requests via `frontend/src/lib/api.ts` (#364).
+- Unit and integration test coverage for the challenge/verify authentication lifecycle, address verification, and failure throttling in `backend/src/api/routes/__tests__/auth.test.ts` (#366).
 - `AuthProvider` context and `useAuth` hook (`frontend/src/hooks/useAuth.tsx`) wrapping the application in `app/layout.tsx`, coordinating Freighter wallet connection, challenge-response session tokens, and modal state (#362).
 - `ProtectedRoute` component (`frontend/src/components/auth/ProtectedRoute.tsx`) redirecting unauthenticated visitors to `/` with accessible loading skeleton fallback and zero secret exposure (#363).
 - `401 Unauthorized` interceptor callback in `frontend/src/lib/api.ts` triggering `ReauthModal` (`frontend/src/components/auth/ReauthModal.tsx`) with dark-mode support and focus trap, enabling seamless re-signing upon token expiration (#365).
@@ -19,7 +23,6 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dedicated containerized test PostgreSQL database in `docker-compose.test.yml` with tmpfs storage and isolated test ports (#369).
 - Test database setup runner (`backend/src/test/setup.ts`) executing pending schema migrations and baseline seeds before tests (#370).
 - Test database teardown runner (`backend/src/test/teardown.ts`) dynamically discovering and truncating public tables with cascade while preserving migration state (#371).
-
 - Global SWR configuration (`frontend/src/lib/swr.tsx`): one shared fetcher, `errorRetryCount: 3`, `revalidateOnFocus: false` and a 30s default refresh, mounted at the app root. Data hooks now key on API paths rather than absolute URLs (#344). `useBalances` accepts an optional `communityId` filter (#335). Treasury balances (#337) are served by the existing `useTreasury(communityId)`.
 - `useXlmPrice` hook tests covering the price fetch and error paths, ported from #810 (#338); the hook itself already polls every 60 seconds.
 - `useEstimateFee` hook to calculate and display estimated transaction fees dynamically before signing, preventing surprise rejections on busy networks (#348).
