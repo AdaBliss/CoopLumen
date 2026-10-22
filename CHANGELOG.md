@@ -131,6 +131,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- JSON request bodies are now limited to 10kb (`express.json({ limit: '10kb' })` in `backend/src/app.ts`). Oversized payloads are rejected with `413` before they are fully buffered, closing a memory-exhaustion vector on every JSON endpoint (#431).
 - Restored `backend/src/contracts/transactions.ts` (`buildUnsignedPayment`), which a prior cleanup commit deleted as unused dead code without also removing its only caller, `POST /api/v1/transactions/unsigned` — leaving the backend unable to compile or run its test suite.
 - Error responses across `communities.ts`, `loans.ts`, `tokens.ts`, and the shared `validateBody`/`validateParams`/`validateQuery` middleware now consistently include `data: null`, matching the `{ data, meta?, error? }` envelope documented for the rest of the API
 - `docs/openapi.yaml`: added the previously undocumented Communities list/search/create, full Tokens surface (burn, trustline, community listing, holders, supply, history), Loans lifecycle, and Balances loan endpoints, and fixed several broken `$ref` pointers (`CommunityId`/`Page`/`Limit` parameters and `IssueToken`/`TokenMetadata` schemas were referenced but never defined)

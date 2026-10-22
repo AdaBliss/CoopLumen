@@ -18,6 +18,9 @@ app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000' }));
 // re-serialization has a chance to change its byte representation.
 app.use(
   express.json({
+    // Bodies over 10kb are rejected with 413 before they are fully buffered,
+    // so an oversized payload cannot exhaust memory in the parser.
+    limit: '10kb',
     verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
       req.rawBody = Buffer.from(buf);
     },
