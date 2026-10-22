@@ -1,0 +1,54 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.connected {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.network {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--color-secondary);
+  background: color-mix(in srgb, var(--color-secondary) 12%, transparent);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.balance {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.badge {
+  font-size: 0.75rem;
+  background: var(--color-success);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.key {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.error {
+  font-size: 0.75rem;
+  color: var(--color-error);
+}

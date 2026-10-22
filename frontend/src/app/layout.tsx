@@ -1,11 +1,25 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ToastProvider } from '@/hooks/useToast';
-import { ToastDisplay } from '@/components/ToastDisplay';
+import { AuthProvider } from '@/hooks/useAuth';
+import { ThemeProvider } from '@/hooks/useTheme';
+import { SWRProvider } from '@/lib/swr';
+import { LocaleProvider } from '@/hooks/useLocale';
+import { ToastDisplay } from '@/components/layout/ToastDisplay';
+import { Footer } from '@/components/layout/Footer';
+import { PageTransition } from '@/components/layout/PageTransition';
+import { THEME_INIT_SCRIPT } from '@/lib/theme';
+import { LOCALE_INIT_SCRIPT, getDefaultLocale, getDirection } from '@/lib/i18n';
+import { validateFrontendEnv } from '@/lib/env';
 import './globals.css';
 
+validateFrontendEnv();
+
 const inter = Inter({ subsets: ['latin'] });
+
+const defaultLocale = getDefaultLocale();
+const defaultDirection = getDirection(defaultLocale);
 
 export const metadata: Metadata = {
   title: 'CoopLumen — Decentralized Community Finance',
@@ -14,12 +28,31 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // The pre-paint scripts below set the theme class and the `lang`/`dir`
+    // attributes on this element, so the server markup and the hydrated markup
+    // differ here by design.
+    <html lang={defaultLocale} dir={defaultDirection} suppressHydrationWarning>
+      <head>
+        {/* Both run before first paint to avoid a flash of the wrong palette or direction. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: LOCALE_INIT_SCRIPT }} />
+      </head>
       <body className={inter.className}>
-        <ToastProvider>
-          <ErrorBoundary>{children}</ErrorBoundary>
-          <ToastDisplay />
-        </ToastProvider>
+        <SWRProvider>
+          <ThemeProvider>
+            <LocaleProvider defaultLocale={defaultLocale}>
+              <ToastProvider>
+                <AuthProvider>
+                  <ErrorBoundary>
+                    <PageTransition>{children}</PageTransition>
+                  </ErrorBoundary>
+                  <Footer />
+                  <ToastDisplay />
+                </AuthProvider>
+              </ToastProvider>
+            </LocaleProvider>
+          </ThemeProvider>
+        </SWRProvider>
       </body>
     </html>
   );

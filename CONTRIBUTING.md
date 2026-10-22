@@ -81,20 +81,43 @@ Open [http://localhost:3000](http://localhost:3000) and confirm the dashboard lo
 
 ```
 cooplumen/
-├── backend/src/
-│   ├── api/routes/          # Express route handlers
-│   ├── api/middleware/      # Error handling, 404
-│   ├── contracts/           # Stellar SDK wrappers — core blockchain logic
-│   ├── db/                  # Pool, migrations
-│   └── utils/               # Logger
+├── backend/
+│   ├── scripts/                 # Manual testnet verification scripts
+│   └── src/
+│       ├── api/routes/          # Express route handlers
+│       ├── api/middleware/      # Auth, validation, rate limiting, errors
+│       ├── api/schemas/         # Zod request schemas
+│       ├── cache/               # Redis and in-process caches
+│       ├── contracts/           # Stellar SDK wrappers - core blockchain logic
+│       ├── services/            # Non-Stellar integrations (market price feed)
+│       ├── db/                  # Pool, migrations
+│       └── utils/               # Logger
 ├── frontend/src/
-│   ├── app/                 # Next.js App Router pages
-│   ├── components/          # React UI components
-│   └── hooks/               # SWR data-fetching hooks
+│   ├── app/                     # Next.js App Router pages
+│   ├── components/
+│   │   ├── ui/                  # Design-system primitives
+│   │   ├── layout/              # Header, footer, sidebar, navigation, theme and locale
+│   │   ├── community/           # Community and member forms and lists
+│   │   ├── dashboard/           # Dashboard view
+│   │   ├── landing/             # Marketing landing page
+│   │   ├── loans/               # Lending flow
+│   │   ├── multisig/            # Multi-signature proposals
+│   │   ├── profile/             # Account profile
+│   │   ├── reputation/          # Borrower reputation
+│   │   ├── tokens/              # Token issuance, transfer and listing
+│   │   ├── transactions/        # Transaction history and live feed
+│   │   ├── treasury/            # Treasury balances and signers
+│   │   └── wallet/              # Wallet connection and balances
+│   ├── hooks/                   # SWR data-fetching hooks
+│   └── lib/                     # API client, SWR config, schemas, design tokens
+├── docs/                        # Architecture, database, CI/CD, API spec
+├── scripts/
+│   ├── db/                      # Backup and constraint-validation scripts
+│   └── issues/                  # Backlog tooling
 └── docker-compose.yml
 ```
 
-New contributors: start with issues labeled [`good first issue`](#issue-labeling-scheme). The `/contracts` module and `/api/routes` are the best places to add features once you understand the flow.
+New contributors: start with issues labeled [`good first issue`](#issue-labeling-scheme). `backend/src/contracts/` and `backend/src/api/routes/` are the best places to add features once you understand the flow.
 
 ---
 

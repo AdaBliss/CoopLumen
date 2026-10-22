@@ -2,20 +2,16 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'jsdom',
+  roots: ['<rootDir>/src'],
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
+    // Stylesheets first, so aliased CSS module imports are stubbed too.
     '\\.(css|less|sass|scss)$': '<rootDir>/__mocks__/styleMock.js',
+    '^@/(.*)$': '<rootDir>/src/$1',
   },
   transform: {
-    '^.+\\.(ts|tsx)$': [
-      'ts-jest',
-      { tsconfig: { jsx: 'react-jsx' } },
-    ],
+    '^.+\\.(ts|tsx)$': ['ts-jest', { tsconfig: { jsx: 'react-jsx' } }],
   },
-  collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.d.ts',
-    '!src/app/layout.tsx',
-  ],
+  collectCoverageFrom: ['src/**/*.{ts,tsx}', '!src/**/*.d.ts', '!src/app/layout.tsx'],
 };

@@ -1,41 +1,193 @@
 import { Request, Response, NextFunction } from 'express';
+import { db } from '../../db';
+import { verifySessionToken } from '../utils/sessionToken';
+import { readAuthCookie } from '../utils/authCookie';
+import { logger } from '../../utils/logger';
+
+export interface AuthContext {
+  /** The Stellar address that proved control of its key via /api/v1/auth/verify. */
+  address: string;
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      auth?: AuthContext;
+    }
+  }
+}
 
 /**
- * Placeholder admin authentication middleware.
- * TODO: Replace with proper authentication/authorization when implemented.
- *
- * For now, this is a no-op that allows all requests through.
- * In a production system, this would:
- * 1. Validate JWT tokens or API keys
- * 2. Check user roles/permissions
- * 3. Return 401/403 for unauthorized access
+ * Requires a valid `Authorization: Bearer <token>` or session cookie, minted by
+ * POST /api/v1/auth/verify after the caller signed a Freighter challenge.
+ * On success, `req.auth.address` is the authenticated Stellar address.
  */
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  // TODO: Implement proper admin authentication
-  // For now, allow all requests through as a placeholder
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const cookieToken = readAuthCookie(req);
+  const header = req.headers.authorization;
+  const token = cookieToken ?? (header?.startsWith('Bearer ') ? header.slice(7) : null);
+
+  if (!token) {
+    res.status(401).json({ data: null, error: 'Authentication required' });
+    return;
+  }
+
+  const payload = verifySessionToken(token);
+  if (!payload) {
+    res.status(401).json({ data: null, error: 'Invalid or expired session token' });
+    return;
+  }
+
+  req.auth = { address: payload.address };
+  next();
+}
+
+/** Roles a member can hold in a community (the `members_role_check` values). */
+export type MemberRole = 'admin' | 'treasurer' | 'member' | 'observer';
+
+/**
+ * Cookie-based counterpart of {@link requireAuth} for browser sessions. Validates
+ * the httpOnly `cooplumen_session` cookie set by POST /api/v1/auth/verify
+ * (signature and expiry) and sets `req.auth.address`. When no cookie is present
+ * it falls back to an `Authorization: Bearer` token so API clients keep working;
+ * a cookie, when present, takes precedence and is never combined with the header.
+ * Rejects with the standard 401 envelope and never echoes the token.
+ */
+export function authenticateJWT(req: Request, res: Response, next: NextFunction): void {
+  const cookieToken = readAuthCookie(req);
+  const header = req.headers.authorization;
+  const token = cookieToken ?? (header?.startsWith('Bearer ') ? header.slice(7) : null);
+
+  if (!token) {
+    res.status(401).json({ data: null, error: 'Authentication required' });
+    return;
+  }
+
+  const payload = verifySessionToken(token);
+  if (!payload) {
+    res.status(401).json({ data: null, error: 'Invalid or expired session token' });
+    return;
+  }
+
+  req.auth = { address: payload.address };
   next();
 }
 
 /**
- * Future implementation might look like:
+ * RBAC guard. Requires the authenticated address (set by {@link requireAuth},
+ * which must run first) to hold one of `roles` as an active member of the
+ * community identified by `:id` in the route params.
  *
- * export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
- *   const authHeader = req.headers.authorization;
- *   if (!authHeader?.startsWith('Bearer ')) {
- *     res.status(401).json({ data: null, error: 'Authentication required' });
- *     return;
- *   }
- *
- *   try {
- *     const token = authHeader.substring(7);
- *     const payload = verifyJWT(token);
- *     if (payload.role !== 'admin') {
- *       res.status(403).json({ data: null, error: 'Admin access required' });
- *       return;
- *     }
- *     next();
- *   } catch {
- *     res.status(401).json({ data: null, error: 'Invalid token' });
- *   }
- * }
+ * Responses use the `{ data, error }` envelope: 401 when unauthenticated and
+ * 403 when the caller is not an active member or holds a role outside `roles`. An empty `roles` list matches nobody, so it fails closed.
  */
+export function requireRole(roles: readonly MemberRole[]) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.auth) {
+      res.status(401).json({ data: null, error: 'Authentication required' });
+      return;
+    }
+
+    try {
+      let communityId =
+        req.params?.id ??
+        (req.params as Record<string, string> | undefined)?.communityId ??
+        (req.body as Record<string, unknown> | undefined)?.communityId;
+
+      if (!communityId && (req.body as Record<string, unknown> | undefined)?.issuerPublicKey) {
+        const issuerKey = (req.body as Record<string, unknown>).issuerPublicKey;
+        const [c] = await db.query<{ id: string }>(
+          `SELECT id FROM communities WHERE (issuer_public_key = $1 OR asset_issuer = $1) AND deleted_at IS NULL`,
+          [issuerKey]
+        );
+        communityId = c?.id;
+      }
+
+      if (!communityId) {
+        res.status(404).json({ data: null, error: 'Community not found' });
+        return;
+      }
+
+      const members =
+        (await db.query<{ role: string }>(
+          `SELECT role FROM members
+         WHERE community_id = $1 AND stellar_address = $2 AND deleted_at IS NULL`,
+          [communityId, req.auth.address]
+        )) ?? [];
+      const member = members[0];
+
+      if (!member || !(roles as readonly string[]).includes(member.role)) {
+        res.status(403).json({
+          data: null,
+          error: `Requires community role: ${roles.join(' or ')}`,
+        });
+        return;
+      }
+
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+/** Former name of {@link requireRole}, kept so existing imports keep working. */
+export const requireCommunityRole = requireRole;
+
+/**
+ * Addresses allowed to call operator-only routes, read once at startup from
+ * ADMIN_ADDRESSES (comma-separated Stellar public keys).
+ *
+ * An unset or empty list means nobody qualifies. That is deliberate: an
+ * unconfigured deployment should refuse operator actions rather than allow
+ * them, which is what the previous no-op implementation did.
+ */
+function readAdminAddresses(): Set<string> {
+  return new Set(
+    (process.env.ADMIN_ADDRESSES ?? '')
+      .split(',')
+      .map((address) => address.trim())
+      .filter(Boolean)
+  );
+}
+
+let adminAddresses: Set<string> | null = null;
+
+/** Re-reads ADMIN_ADDRESSES. Exported for tests that set the variable per case. */
+export function resetAdminAddressCache(): void {
+  adminAddresses = null;
+}
+
+/**
+ * Requires the authenticated address to be an operator of this deployment.
+ *
+ * Server-wide admin is not a community role - the routes it guards are not
+ * scoped to a community - so membership is not consulted; the address must
+ * appear in ADMIN_ADDRESSES. Mount it after {@link requireAuth}, which
+ * populates `req.auth`.
+ */
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (!req.auth) {
+    res.status(401).json({ data: null, error: 'Authentication required' });
+    return;
+  }
+
+  if (adminAddresses === null) {
+    adminAddresses = readAdminAddresses();
+    if (adminAddresses.size === 0) {
+      logger.warn('ADMIN_ADDRESSES is unset; every operator route will reject with 403');
+    }
+  }
+
+  if (!adminAddresses.has(req.auth.address)) {
+    logger.warn('Rejected an operator request from a non-admin address', {
+      address: req.auth.address,
+      path: req.path,
+    });
+    res.status(403).json({ data: null, error: 'Requires operator privileges' });
+    return;
+  }
+
+  next();
+}

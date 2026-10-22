@@ -1,0 +1,138 @@
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+  /* Added to establish a positioning context for the link overlay */
+  position: relative;
+}
+
+.card:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+}
+
+/* Invisible overlay to make the whole card clickable without invalid HTML */
+.linkOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+/* Elevate content above the overlay so text remains selectable */
+.content {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.name {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.token {
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+  color: var(--color-primary);
+  padding: 2px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.05em;
+}
+
+.description {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-family: monospace;
+}
+
+/* --- New Metrics & Actions Styles --- */
+
+.metrics {
+  display: flex;
+  gap: 16px;
+  padding-top: 16px;
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border);
+}
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.metricValue {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.metricLabel {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* Elevate actions above the overlay so the button remains clickable */
+.actions {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto; /* Pushes the button to the bottom if the card stretches */
+}
+
+.buttonJoin,
+.buttonJoined {
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.buttonJoin {
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  color: var(--color-surface); /* Assuming light text on primary background */
+  cursor: pointer;
+}
+
+.buttonJoin:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.buttonJoined {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}

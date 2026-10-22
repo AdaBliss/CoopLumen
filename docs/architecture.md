@@ -83,9 +83,10 @@ Stellar is the source of truth for balances and transactions. PostgreSQL stores 
 ### Issue a community token
 
 ```
-Treasurer fills form → POST /api/v1/tokens/issue
-  → express-validator validates input
-  → contracts/assets.issueAsset() builds + signs transaction
+Treasurer fills form → POST /api/v1/tokens/build-issue
+  → Zod validates input
+  → contracts/assets.buildUnsignedIssueAsset() builds the transaction
+  → Wallet signs the returned XDR locally, POST /api/v1/tokens/submit
   → Stellar SDK submits to Horizon
   → Horizon settles (~4s)
   → Backend records token metadata to PostgreSQL
@@ -148,7 +149,7 @@ CoopLumen/
 - Helmet.js enforces CSP, HSTS, X-Frame-Options
 - CORS restricted to `FRONTEND_URL`
 - Rate limiting on all write endpoints (Phase 1: `express-rate-limit`)
-- JWT authentication (wallet-challenge-response) in Phase 1
+- JWT authentication (wallet-challenge-response) in Phase 1 — see [Wallet Authentication Flow](auth-flow.md)
 - Multi-sig treasury accounts in Phase 2
 - Soroban-governed treasury in Phase 3
 

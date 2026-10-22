@@ -12,16 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  # Kept in step with the node:<major>-alpine tag in backend/Dockerfile and
+  # frontend/Dockerfile, and with @types/node. If CI tests on one major while
+  # the image ships another, the suite stops saying anything about the runtime
+  # that actually runs in production.
+  NODE_VERSION: '26'
 
 jobs:
   lint:
     name: Lint & format
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -33,10 +38,6 @@ jobs:
         working-directory: backend
         run: npm run lint
 
-      - name: Check backend formatting
-        working-directory: backend
-        run: npm run format:check
-
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
@@ -45,17 +46,23 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
-      - name: Check frontend formatting
-        working-directory: frontend
+      # One check for the whole repository. Per-workspace checks left root
+      # configs, scripts/ and docs/ unexamined, which is how a malformed
+      # openapi.yaml and a drifting set of config files reached main.
+      - name: Install root deps
+        run: npm ci
+
+      - name: Check formatting
         run: npm run format:check
 
   typecheck:
     name: Type-check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -78,6 +85,7 @@ jobs:
   test-backend:
     name: Backend tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -112,9 +120,9 @@ jobs:
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -126,17 +134,29 @@ jobs:
         working-directory: backend
         run: npm run db:migrate
 
+      # Coverage is collected here rather than in a second test run: the
+      # sonarcloud job needs the lcov report, and re-running the suite just to
+      # produce it would double the slowest job.
       - name: Run tests (unit + integration)
         working-directory: backend
-        run: npm test -- --runInBand
+        run: npm test -- --runInBand --coverage
+
+      - name: Upload backend coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
 
   test-frontend:
     name: Frontend tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -144,6 +164,289 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # Serial, like the backend job. The frontend suite is now 94 suites, and
+      # several of the heavier ones (userEvent-driven forms, the multi-sig E2E
+      # flow) are load-sensitive: they pass alone but intermittently blow
+      # Jest's default 5s budget when workers compete, failing on timing
+      # rather than on any assertion. Running in band makes the gate
+      # deterministic — and stricter about shared state, not looser.
       - name: Run tests
         working-directory: frontend
-        run: npm test
+        run: npm test -- --runInBand --coverage
+
+      - name: Upload frontend coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
+
+  test-contracts:
+    name: Governance contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run contract tests
+        run: cargo test --workspace
+
+  test-governance-e2e:
+    name: Governance browser flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install-deps chromium
+          npx playwright install chromium
+
+      - name: Start the Docker Compose stack
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+
+      - name: Run database migrations
+        run: >-
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml
+          exec -T -e DATABASE_URL=postgresql://cooplumen:cooplumen@db:5432/cooplumen
+          backend npm run db:migrate
+
+      - name: Run governance browser test
+        working-directory: frontend
+        env:
+          AUTH_SESSION_SECRET: governance-e2e-secret
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_API_URL: http://localhost:4000
+        run: npm run test:e2e
+
+      - name: Print service logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs --no-color
+
+      - name: Stop the Docker Compose stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          # next build needs *a* value for these at build time; real values are
+          # injected at deploy time. Keeping this here (rather than committing
+          # a .env file) is what lets the build job run without secrets.
+          NEXT_PUBLIC_API_URL: http://localhost:4000
+          NEXT_PUBLIC_STELLAR_NETWORK: TESTNET
+
+  docker-build:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build backend image
+        run: docker build -t cooplumen-backend:ci ./backend
+
+      - name: Build frontend image
+        run: docker build -t cooplumen-frontend:ci ./frontend
+
+  security-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Gate on what ships: a high-severity advisory in a production dependency
+      # fails the job.
+      - name: Audit backend production dependencies
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit frontend production dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
+      # Dev tooling is reported but not gated. Some advisories there have no
+      # patched release (braces, via ts-node-dev and eslint-config-next) and
+      # only ever see developer-written glob patterns.
+      - name: Report all backend advisories
+        working-directory: backend
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - name: Report all frontend advisories
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  commitlint:
+    name: Commit message lint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install commitlint
+        run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+
+      - name: Lint commits in this PR
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+  # The deploy path is exercised on every PR, not first discovered during a
+  # release: the shell is linted, the health-check poller and the blue/green
+  # control flow (including failed health checks and rollback) are run against
+  # local fakes, and the production compose and nginx configs are validated.
+  deploy-scripts:
+    name: Deploy scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Lint shell scripts
+        run: shellcheck scripts/deploy/*.sh
+
+      - name: Test health-check polling (pass and fail paths)
+        run: bash scripts/deploy/test-wait-for-health.sh
+
+      - name: Test blue/green deploy flow (switch, failure, rollback)
+        run: bash scripts/deploy/test-deploy.sh
+
+      - name: Validate production compose file
+        run: |
+          touch .env.production
+          docker compose -f docker-compose.prod.yml config --quiet
+
+      - name: Validate nginx config
+        run: |
+          mkdir -p .deploy/nginx
+          echo 'server 127.0.0.1:4000;' > .deploy/nginx/active.conf
+          docker run --rm             -v "$PWD/deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"             -v "$PWD/.deploy/nginx:/etc/nginx/upstream:ro"             nginx:1.27-alpine nginx -t
+
+  # Static analysis and the SonarCloud quality gate. Runs once both test jobs
+  # have produced coverage. The scanner waits for the gate result
+  # (sonar.qualitygate.wait), so a gate that fails on new bugs, vulnerabilities,
+  # code smells, duplication or coverage fails this job and, through
+  # `quality-gate` below, blocks the PR. Fork PRs cannot read SONAR_TOKEN, so
+  # the analysis is skipped with a warning there instead of failing; it still
+  # runs on pushes to the upstream repository and on same-repository PRs.
+  sonarcloud:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test-backend, test-frontend]
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Check for SONAR_TOKEN
+        id: token
+        run: |
+          if [[ -n "$SONAR_TOKEN" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SONAR_TOKEN is not available (fork pull request or secret not configured); skipping SonarCloud analysis."
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.token.outputs.available == 'true'
+        with:
+          # Full history so SonarCloud can attribute new code and blame correctly.
+          fetch-depth: 0
+
+      - name: Download backend coverage
+        if: steps.token.outputs.available == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage
+
+      - name: Download frontend coverage
+        if: steps.token.outputs.available == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+
+      - name: SonarCloud scan and quality gate
+        if: steps.token.outputs.available == 'true'
+        uses: SonarSource/sonarqube-scan-action@v6
+        with:
+          args: >-
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+
+  # Single required status check to point branch protection at, instead of
+  # every job above individually — add a job to the `needs` list here and it
+  # becomes part of the gate with no branch-protection settings to update.
+  quality-gate:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    needs:
+      [
+        lint,
+        typecheck,
+        test-backend,
+        test-frontend,
+        test-contracts,
+        test-governance-e2e,
+        build,
+        docker-build,
+        deploy-scripts,
+        sonarcloud,
+        commitlint,
+      ]
+    if: always()
+    steps:
+      - name: Fail if any required job failed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi

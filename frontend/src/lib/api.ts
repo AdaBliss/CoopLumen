@@ -102,10 +102,14 @@ export type AuthTokenProvider = () =>
   | undefined
   | Promise<string | null | undefined>;
 
+/** Callback invoked when an API request returns HTTP 401 Unauthorized. */
+export type UnauthorizedHandler = () => void;
+
 interface ApiConfig {
   baseUrl?: string;
   timeoutMs?: number;
   getAuthToken?: AuthTokenProvider;
+  onUnauthorized?: UnauthorizedHandler;
 }
 
 const config: ApiConfig = {};
@@ -123,6 +127,7 @@ export function resetApiConfig(): void {
   delete config.baseUrl;
   delete config.timeoutMs;
   delete config.getAuthToken;
+  delete config.onUnauthorized;
 }
 
 /**
@@ -136,6 +141,44 @@ export function setAuthTokenProvider(provider: AuthTokenProvider | null): void {
 /** Convenience wrapper over {@link setAuthTokenProvider} for a static token. */
 export function setAuthToken(token: string | null): void {
   setAuthTokenProvider(token === null ? null : () => token);
+}
+
+/**
+ * Registers a global callback invoked when any API request receives an HTTP 401
+ * Unauthorized response. Used by AuthProvider to trigger the re-authentication modal.
+ */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  config.onUnauthorized = handler ?? undefined;
+}
+
+/** Name of the httpOnly cookie carrying the authenticated session token. */
+export const AUTH_COOKIE_NAME = 'cooplumen_session';
+
+/**
+ * Extracts a cookie value by name from a cookie string or the browser's `document.cookie`.
+ */
+export function readCookie(name: string, cookieString?: string | null): string | null {
+  const source =
+    cookieString !== undefined
+      ? cookieString
+      : typeof document !== 'undefined'
+        ? document.cookie
+        : null;
+
+  if (!source) return null;
+
+  for (const part of source.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    if (part.slice(0, index).trim() !== name) continue;
+    const value = part.slice(index + 1).trim();
+    try {
+      return decodeURIComponent(value) || null;
+    } catch {
+      return value || null;
+    }
+  }
+  return null;
 }
 
 /** The origin every relative path is resolved against. */
@@ -203,8 +246,15 @@ async function buildHeaders(
     headers.set('Content-Type', 'application/json');
   }
 
-  if (auth && !headers.has('Authorization') && config.getAuthToken) {
-    const token = await config.getAuthToken();
+  if (auth && !headers.has('Authorization')) {
+    let token: string | null | undefined = null;
+    if (config.getAuthToken) {
+      token = await config.getAuthToken();
+    }
+    // Fall back to reading JWT from session cookie (Issue #364)
+    if (!token) {
+      token = readCookie(AUTH_COOKIE_NAME);
+    }
     if (token) {
       // A caller-supplied scheme ("Bearer x", "Basic y") is passed through as-is.
       headers.set('Authorization', /^\S+\s/.test(token) ? token : `Bearer ${token}`);
@@ -307,6 +357,7 @@ export async function requestRaw<T>(
   let response: Response;
   try {
     response = await fetch(buildUrl(path, query), {
+      credentials: rest.credentials ?? 'include',
       ...rest,
       method,
       headers,
@@ -335,6 +386,13 @@ export async function requestRaw<T>(
   const envelope = await readEnvelope(response);
 
   if (!response.ok) {
+    if (response.status === 401) {
+      try {
+        config.onUnauthorized?.();
+      } catch {
+        // Prevent subscriber callback errors from suppressing the ApiError
+      }
+    }
     throw new ApiError(readErrorMessage(envelope?.error, statusFallbackMessage(response)), {
       status: response.status,
       code: readErrorCode(envelope?.error, response.status),

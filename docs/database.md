@@ -356,12 +356,12 @@ CHECK constraints — these mirror the request validation in `backend/src/api/sc
 
 Indexes:
 
-| Index                               | Definition                                                | Serves                                        |
-| ----------------------------------- | ---------------------------------------------------------- | ---------------------------------------------- |
-| `communities_name_key`              | `UNIQUE (name)`                                             | duplicate-name 409s                            |
-| `idx_communities_active_created_at` | `(created_at DESC) WHERE deleted_at IS NULL`                | default community listing                      |
-| `idx_communities_asset`             | `(asset_code, asset_issuer)`                                | resolving a community from its Stellar asset   |
-| `idx_communities_fts`               | GIN over `to_tsvector(name \| ' ' \| description)`          | full-text search                               |
+| Index                               | Definition                                         | Serves                                       |
+| ----------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `communities_name_key`              | `UNIQUE (name)`                                    | duplicate-name 409s                          |
+| `idx_communities_active_created_at` | `(created_at DESC) WHERE deleted_at IS NULL`       | default community listing                    |
+| `idx_communities_asset`             | `(asset_code, asset_issuer)`                       | resolving a community from its Stellar asset |
+| `idx_communities_fts`               | GIN over `to_tsvector(name \| ' ' \| description)` | full-text search                             |
 
 Integration tests use deterministic seed fixtures from `backend/src/test/fixtures.ts` to create and tear down the baseline `EcoDAO` and `AgriCoop` records used by the HTTP suite.
 
@@ -581,6 +581,8 @@ Indexes: `(stellar_address, created_at DESC)` for the recipient feed, `community
 
 Constraints: `notifications_type_check` on `type`, `notifications_stellar_address_format` on the recipient address, `notifications_read_at_check` (`read_at IS NULL OR read_at >= created_at`), and `notifications_title_check` (title is not blank). The last three are `NOT VALID`, so they apply to new and updated rows and leave any pre-existing row untouched.
 
+An `AFTER INSERT` trigger on `proposals` creates a `proposal_created` notification for each current (not soft-deleted) member of the proposal's community. The notification metadata contains the proposal ID, type, status, and voting deadline so clients can link the alert to the governance view. The trigger does not backfill alerts for proposals that existed before migration `025_notify_members_on_proposal.sql`.
+
 ---
 
 ### `audit_log`
@@ -662,6 +664,28 @@ Indexes: `community_id`, `proposer_address`, `(community_id, status)`, and a par
 
 ---
 
+### `proposal_delegations`
+
+One proposal-scoped delegation per delegator. Both addresses must be active
+members when the API writes the row. The API prevents self-delegation,
+multi-hop chains, cycles, and delegation after either account has voted.
+
+| Column              | Type          | Notes                                                   |
+| ------------------- | ------------- | ------------------------------------------------------- |
+| `id`                | `UUID`        | PK                                                      |
+| `proposal_id`       | `UUID`        | FK → `proposals(id) ON DELETE CASCADE`                  |
+| `delegator_address` | `TEXT`        | Authenticated member assigning its voting power         |
+| `delegatee_address` | `TEXT`        | Active member receiving the voting power                |
+| `created_at`        | `TIMESTAMPTZ` |                                                         |
+| `updated_at`        | `TIMESTAMPTZ` | Auto-updated when the delegator changes their delegatee |
+
+Both addresses have Stellar public-key CHECK constraints, and a CHECK prevents
+self-delegation. Unique constraint: `(proposal_id, delegator_address)`.
+
+Index: `(proposal_id, delegatee_address)` for resolving represented voters.
+
+---
+
 ### `votes`
 
 Ballots cast against a proposal. One row per voter per proposal — a voter changing their mind
@@ -688,13 +712,16 @@ Indexes: `proposal_id`, `voter_address`, `(proposal_id, choice)` for tallying.
 
 ### `kyc_records`
 
-Per-community KYC verification state for a Stellar address. **Phase 4 prep** — dormant until SEP-12 anchor integration activates it; no API routes read or write this table yet.
+Per-community KYC verification state for a Stellar address. Migration
+`025_activate_kyc_records.sql` activates the table additively, preserves the
+checksum of the original preparation migration, and can be replayed without
+removing existing records.
 
 | Column               | Type          | Notes                                                                                        |
 | -------------------- | ------------- | -------------------------------------------------------------------------------------------- |
 | `id`                 | `UUID`        | PK                                                                                           |
 | `community_id`       | `UUID`        | FK → `communities(id) ON DELETE CASCADE`                                                     |
-| `stellar_address`    | `TEXT`        |                                                                                              |
+| `stellar_address`    | `TEXT`        | Stellar address, `^G[A-Z2-7]{55}$` CHECK enforced for new and updated rows                   |
 | `status`             | `TEXT`        | `pending \| submitted \| verified \| rejected \| expired`, CHECK enforced, default `pending` |
 | `provider`           | `TEXT`        | Nullable — SEP-12 anchor / KYC provider identifier                                           |
 | `provider_reference` | `TEXT`        | Nullable — external reference ID from the provider                                           |
@@ -706,63 +733,73 @@ Per-community KYC verification state for a Stellar address. **Phase 4 prep** —
 
 Unique constraint: `(community_id, stellar_address)` — one KYC record per address per community.
 
+Indexes: `community_id`, `stellar_address`, `status`, and
+`(stellar_address, updated_at DESC, created_at DESC)` for current-status lookups.
+
 ---
 
 ## Foreign Key `ON DELETE` Summary
 
-| Child table          | FK column      | References        | Behaviour           |
-| -------------------- | -------------- | ----------------- | ------------------- |
-| `members`            | `community_id` | `communities(id)` | CASCADE             |
-| `loans`              | `community_id` | `communities(id)` | CASCADE (migration 019) |
-| `payments`           | `community_id` | `communities(id)` | SET NULL (nullable) |
-| `payments`           | `loan_id`      | `loans(id)`       | SET NULL (nullable) |
-| `trustlines`         | —              | —                 | standalone          |
-| `loan_events`        | `loan_id`      | `loans(id)`       | CASCADE             |
-| `loan_events`        | `payment_id`   | `payments(id)`    | SET NULL (nullable) |
-| `tokens`             | `community_id` | `communities(id)` | CASCADE             |
-| `transactions_log`   | `community_id` | `communities(id)` | SET NULL (nullable) |
-| `reputation_scores`  | `community_id` | `communities(id)` | CASCADE             |
-| `community_settings` | `community_id` | `communities(id)` | CASCADE             |
-| `notifications`      | `community_id` | `communities(id)` | CASCADE             |
-| `multisig_requests`  | `community_id` | `communities(id)` | CASCADE             |
-| `proposals`          | `community_id` | `communities(id)` | CASCADE             |
-| `votes`              | `proposal_id`  | `proposals(id)`   | CASCADE             |
-| `kyc_records`        | `community_id` | `communities(id)` | CASCADE             |
-
+| Child table            | FK column      | References        | Behaviour               |
+| ---------------------- | -------------- | ----------------- | ----------------------- |
+| `members`              | `community_id` | `communities(id)` | CASCADE                 |
+| `loans`                | `community_id` | `communities(id)` | CASCADE (migration 019) |
+| `payments`             | `community_id` | `communities(id)` | SET NULL (nullable)     |
+| `payments`             | `loan_id`      | `loans(id)`       | SET NULL (nullable)     |
+| `trustlines`           | —              | —                 | standalone              |
+| `loan_events`          | `loan_id`      | `loans(id)`       | CASCADE                 |
+| `loan_events`          | `payment_id`   | `payments(id)`    | SET NULL (nullable)     |
+| `tokens`               | `community_id` | `communities(id)` | CASCADE                 |
+| `transactions_log`     | `community_id` | `communities(id)` | SET NULL (nullable)     |
+| `reputation_scores`    | `community_id` | `communities(id)` | CASCADE                 |
+| `community_settings`   | `community_id` | `communities(id)` | CASCADE                 |
+| `notifications`        | `community_id` | `communities(id)` | CASCADE                 |
+| `multisig_requests`    | `community_id` | `communities(id)` | CASCADE                 |
+| `proposals`            | `community_id` | `communities(id)` | CASCADE                 |
+| `proposal_delegations` | `proposal_id`  | `proposals(id)`   | CASCADE                 |
+| `votes`                | `proposal_id`  | `proposals(id)`   | CASCADE                 |
+| `kyc_records`          | `community_id` | `communities(id)` | CASCADE                 |
 
 ### ON DELETE Behavior Design Rationale
 
 **CASCADE** (most common): Used for dependent entities that have no meaning without their parent.
+
 - **Examples**: `members`, `loans`, `tokens`, `reputation_scores`, `community_settings`
 - **Rationale**: These entities are intrinsically tied to their parent community. If a community is deleted, its members, loans, tokens, reputation scores, and settings should also be removed to maintain data consistency.
 
 **SET NULL**: Used for audit trails and immutable records that should survive parent deletion.
+
 - **Examples**: `transactions_log`, `payments.community_id`, `payments.loan_id`, `loan_events.payment_id`
 - **Rationale**: Audit records should be preserved for compliance and historical analysis. Setting the foreign key to NULL preserves the immutable record while breaking the relationship with the deleted parent.
 
 **RESTRICT/NO ACTION**: Not used in this schema (all foreign keys have explicit behaviors).
+
 - **Rationale**: Default PostgreSQL behavior prevents accidental data loss but requires explicit design decisions for each relationship.
 
 ### Connection Pooling Guidelines
 
 **PostgreSQL Connection Pool (backend/src/db/index.ts)**:
+
 - **PGPOOL_MAX=10**: Default pool size suitable for most applications. Increase for high-traffic production.
 - **PGPOOL_IDLE_TIMEOUT=30000**: 30 seconds idle timeout prevents connection accumulation.
 - **PGPOOL_CONNECTION_TIMEOUT=2000**: 2 second connection timeout ensures quick failure for unavailable databases.
 
 **PgBouncer (docker-compose.yml)**:
+
 - **PGBOUNCER_POOL_MODE=transaction**: Transaction pooling for maximum connection reuse.
 - **PGBOUNCER_MAX_CLIENT_CONN=100**: Maximum client connections through PgBouncer.
 - **PGBOUNCER_DEFAULT_POOL_SIZE=20**: Default pool size per database.
 
 ### Backup Strategy
 
-**Automated Backups (`scripts/backup-db.sh`)**:
+**Automated Backups (`scripts/db/backup-db.sh`)**:
+
 - **Format**: PostgreSQL custom format (`-Fc`) for efficient compression and selective restore.
 - **Retention**: Keeps 10 most recent backups, automatically prunes older ones.
 - **Scheduling**: Recommended to run daily via cron or CI/CD pipeline.
 
 **Restore Procedure**:
+
 ```bash
 # Restore from backup
 pg_restore --clean --if-exists --dbname=cooplumen backups/cooplumen_YYYYMMDDTHHMMSSZ.dump

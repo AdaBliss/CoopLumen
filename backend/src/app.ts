@@ -1,4 +1,4 @@
-import express, { NextFunction, Request, Response } from 'express';
+import express, { NextFunction, Request, Response, Application } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { apiRouter } from './api/routes';
@@ -6,10 +6,19 @@ import { errorHandler } from './api/middleware/errorHandler';
 import { notFound } from './api/middleware/notFound';
 import { requestLogger } from './api/middleware/requestLogger';
 import { communityWriteLimiter } from './api/middleware/rateLimit';
+import { csrfProtection } from './api/middleware/csrf';
 import { db } from './db';
 import { StellarService } from './contracts/stellar';
 
-const app = express();
+const app: Application = express();
+
+// Behind a load balancer every request otherwise appears to come from the proxy,
+// so per-IP rate limits would throttle all clients as one. Opt in with the
+// number of trusted proxy hops, e.g. TRUST_PROXY=1.
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set('trust proxy', Number.isInteger(hops) ? hops : process.env.TRUST_PROXY);
+}
 
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000' }));
@@ -61,7 +70,7 @@ app.get('/api/health', healthHandler);
 app.use('/api/v1/communities', communityWriteLimiter);
 
 // All resource routes live under the /api/v1 version prefix.
-app.use('/api/v1', apiRouter);
+app.use('/api/v1', csrfProtection, apiRouter);
 
 app.use(notFound);
 app.use(errorHandler);

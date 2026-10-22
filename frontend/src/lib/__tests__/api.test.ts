@@ -12,7 +12,10 @@ import {
   resetApiConfig,
   setAuthToken,
   setAuthTokenProvider,
+  setUnauthorizedHandler,
   swrFetcher,
+  AUTH_COOKIE_NAME,
+  readCookie,
 } from '../api';
 
 const BASE_URL = 'https://api.cooplumen.test';
@@ -196,6 +199,32 @@ describe('auth header injection', () => {
     fetchMock.mockResolvedValue(jsonResponse({ data: null }));
     await api.get('/api/v1/communities');
     expect(requestHeader('Authorization')).toBeNull();
+  });
+
+  it('injects JWT from cooplumen_session cookie when no provider is configured', async () => {
+    (global as unknown as { document?: { cookie: string } }).document = {
+      cookie: `${AUTH_COOKIE_NAME}=jwt-cookie-token; other_cookie=xyz`,
+    };
+    fetchMock.mockResolvedValue(jsonResponse({ data: null }));
+
+    await api.get('/api/v1/communities');
+    expect(requestHeader('Authorization')).toBe('Bearer jwt-cookie-token');
+
+    delete (global as unknown as { document?: { cookie: string } }).document;
+  });
+
+  it('sets credentials to include by default for session cookie transit', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ data: null }));
+    await api.get('/api/v1/communities');
+    expect(requestInit().credentials).toBe('include');
+  });
+
+  it('readCookie helper correctly parses cookies and handles special characters', () => {
+    const cookieHeader = 'theme=dark; cooplumen_session=my%2Etoken%2Ehere; lang=en';
+    expect(readCookie('cooplumen_session', cookieHeader)).toBe('my.token.here');
+    expect(readCookie('theme', cookieHeader)).toBe('dark');
+    expect(readCookie('nonexistent', cookieHeader)).toBeNull();
+    expect(readCookie('cooplumen_session', null)).toBeNull();
   });
 });
 
@@ -411,5 +440,61 @@ describe('swrFetcher', () => {
   it('rejects with an ApiError so SWR exposes a typed error', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ data: null, error: 'nope' }, { status: 500 }));
     await expect(swrFetcher('/api/v1/communities')).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('setUnauthorizedHandler', () => {
+  it('invokes the handler when receiving a 401 Unauthorized response', async () => {
+    const handler = jest.fn();
+    setUnauthorizedHandler(handler);
+
+    fetchMock.mockResolvedValue(
+      jsonResponse({ data: null, error: 'Authentication required' }, { status: 401 })
+    );
+
+    await expect(api.get('/api/v1/protected')).rejects.toMatchObject({
+      status: 401,
+      name: 'ApiError',
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not invoke the handler for non-401 errors or successful requests', async () => {
+    const handler = jest.fn();
+    setUnauthorizedHandler(handler);
+
+    // 200 OK
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: 'ok' }, { status: 200 }));
+    await api.get('/api/v1/public');
+    expect(handler).not.toHaveBeenCalled();
+
+    // 400 Bad Request
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'bad' }, { status: 400 }));
+    await expect(api.get('/api/v1/public')).rejects.toBeInstanceOf(ApiError);
+    expect(handler).not.toHaveBeenCalled();
+
+    // 403 Forbidden
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'forbidden' }, { status: 403 }));
+    await expect(api.get('/api/v1/public')).rejects.toBeInstanceOf(ApiError);
+    expect(handler).not.toHaveBeenCalled();
+
+    // 500 Internal Error
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'error' }, { status: 500 }));
+    await expect(api.get('/api/v1/public')).rejects.toBeInstanceOf(ApiError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('clears the handler when resetApiConfig is called', async () => {
+    const handler = jest.fn();
+    setUnauthorizedHandler(handler);
+    resetApiConfig();
+
+    fetchMock.mockResolvedValue(
+      jsonResponse({ data: null, error: 'Authentication required' }, { status: 401 })
+    );
+
+    await expect(api.get('/api/v1/protected')).rejects.toMatchObject({ status: 401 });
+    expect(handler).not.toHaveBeenCalled();
   });
 });

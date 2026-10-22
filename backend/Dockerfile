@@ -1,19 +1,19 @@
-# ── deps: production-only dependencies ────────────────────────────────────────
-FROM node:20-alpine AS deps
+# deps: production-only dependencies
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# ── builder: compile TypeScript ────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+# builder: compile TypeScript
+FROM node:26-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-# ── dev: hot-reload server (used by docker-compose in development) ─────────────
-FROM node:20-alpine AS dev
+# dev: hot-reload server (used by docker-compose in development)
+FROM node:26-alpine AS dev
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -21,8 +21,8 @@ COPY . .
 EXPOSE 4000
 CMD ["npm", "run", "dev"]
 
-# ── production: minimal hardened runtime image ─────────────────────────────────
-FROM node:20-alpine AS production
+# production: minimal hardened runtime image
+FROM node:26-alpine AS production
 WORKDIR /app
 ENV NODE_ENV=production
 

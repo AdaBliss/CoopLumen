@@ -1,0 +1,57 @@
+version: 2
+
+# Dependabot runs quarterly. Weekly runs produced more pull requests than the
+# project reviews, and a stale dependency pull request is worse than a late
+# one: every merge to main ages it, and merging an aged one can revert work
+# that landed after it was opened.
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/backend'
+    schedule:
+      interval: 'quarterly'
+    open-pull-requests-limit: 10
+    groups:
+      # Cut PR noise: patch/minor bumps land as one PR per ecosystem instead
+      # of one per package. Majors still get their own PR since those need a
+      # human to actually read the changelog.
+      minor-and-patch:
+        update-types: ['minor', 'patch']
+    ignore:
+      # These majors need code migrations, not just a version bump — upgrade
+      # them deliberately in their own PR instead of letting Dependabot open
+      # one that will fail CI.
+      - dependency-name: '@stellar/stellar-sdk'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'express'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'eslint'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: 'npm'
+    directory: '/frontend'
+    schedule:
+      interval: 'quarterly'
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
+    ignore:
+      - dependency-name: 'eslint'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'eslint-config-next'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: 'docker'
+    directory: '/backend'
+    schedule:
+      interval: 'quarterly'
+
+  - package-ecosystem: 'docker'
+    directory: '/frontend'
+    schedule:
+      interval: 'quarterly'
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'quarterly'
